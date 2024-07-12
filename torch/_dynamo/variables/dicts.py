@@ -378,13 +378,9 @@ class DefaultDictVariable(ConstDictVariable):
 
 
 class SetVariable(ConstDictVariable):
-    """We model a sets as dictonary with None values"""
+    """We model sets as dictionaries with None values"""
 
-    def __init__(
-        self,
-        items: List[VariableTracker],
-        **kwargs,
-    ):
+    def __init__(self, items: List[VariableTracker], **kwargs):
         items = dict.fromkeys(items, SetVariable._default_value())
         super().__init__(items, **kwargs)
 
@@ -400,7 +396,6 @@ class SetVariable(ConstDictVariable):
 
     @staticmethod
     def _default_value():
-        # Variable to fill in he keys of the dictinary
         return ConstantVariable.create(None)
 
     def as_proxy(self):
@@ -425,18 +420,17 @@ class SetVariable(ConstDictVariable):
     ) -> "VariableTracker":
         from . import ListVariable, TupleVariable
 
-        # We foward the calls to the dictionary model
         if name == "add":
             assert not kwargs
             assert len(args) == 1
-            name = "__setitem__"
-            args = (args[0], SetVariable._default_value())
+            self.items[ConstDictVariable._HashableTracker(args[0])] = SetVariable._default_value()
+            return ConstantVariable.create(None)
         elif name == "pop":
             assert not kwargs
             assert not args
             # Choose an item at random and pop it via the Dict.pop method
             result = self.set_items.pop().vt
-            super().call_method(tx, name, (result,), kwargs)
+            self.items.pop(ConstDictVariable._HashableTracker(result))
             return result
         elif name == "isdisjoint":
             assert not kwargs
@@ -444,25 +438,61 @@ class SetVariable(ConstDictVariable):
             return variables.UserFunctionVariable(
                 polyfill.set_isdisjoint
             ).call_function(tx, [self, args[0]], {})
-        elif (
-            name == "update"
-            and len(args) == 1
-            and isinstance(
+        elif name == "update" and len(args) == 1 and isinstance(
                 args[0],
                 (
                     SetVariable,
                     ListVariable,
                     TupleVariable,
                 ),
-            )
-            and self.mutable_local
-        ):
+            ) and self.mutable_local:
             if isinstance(args[0], (ListVariable, TupleVariable)):
                 arg = SetVariable(args[0].unpack_var_sequence(tx))
             else:
                 arg = args[0]
-            return super().call_method(tx, "update", (arg,), kwargs)
-        return super().call_method(tx, name, args, kwargs)
+            self.items.update({ConstDictVariable._HashableTracker(e): SetVariable._default_value() for e in arg.set_items})
+            return ConstantVariable.create(None)
+        elif name == "union":
+            assert len(args) == 1
+            return SetVariable(list(self.set_items.union(args[0].set_items)))
+        elif name == "intersection":
+            assert len(args) == 1
+            return SetVariable(list(self.set_items.intersection(args[0].set_items)))
+        elif name == "difference":
+            assert len(args) == 1
+            return SetVariable(list(self.set_items.difference(args[0].set_items)))
+        elif name == "symmetric_difference":
+            assert len(args) == 1
+            return SetVariable(list(self.set_items.symmetric_difference(args[0].set_items)))
+        elif name == "copy":
+            return SetVariable(list(self.set_items))
+    elif name == "intersection_update":
+            assert len(args) == 1
+            self.items = {ConstDictVariable._HashableTracker(e): SetVariable._default_value() for e in self.set_items.intersection(args[0].set_items)}
+            return ConstantVariable.create(None)
+        elif name == "difference_update":
+            assert len(args) == 1
+            self.items = {ConstDictVariable._HashableTracker(e): SetVariable._default_value() for e in self.set_items.difference(args[0].set_items)}
+            return ConstantVariable.create(None)
+        elif name == "symmetric_difference_update":
+            assert len(args) == 1
+            self.items = {ConstDictVariable._HashableTracker(e): SetVariable._default_value() for e in self.set_items.symmetric_difference(args[0].set_items)}
+            return ConstantVariable.create(None)
+        elif name == "remove":
+            assert not kwargs
+            assert len(args) == 1
+            self.items.pop(ConstDictVariable._HashableTracker(args[0]))
+            return ConstantVariable.create(None)
+        elif name == "discard":
+            assert not kwargs
+            assert len(args) == 1
+            self.items.pop(ConstDictVariable._HashableTracker(args[0]), None)
+            return ConstantVariable.create(None)
+        elif name == "clear":
+            self.items.clear()
+            return ConstantVariable.create(None)
+        else:
+            return super().call_method(tx, name, args, kwargs)
 
     def getitem_const(self, arg: VariableTracker):
         raise RuntimeError("Illegal to getitem on a set")
